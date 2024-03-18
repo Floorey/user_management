@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SwaggerSettings">
+    <remoteSpecificationUrls>
+      <UrlInfo>
+        <option name="urlString" value="{   &quot;username&quot;: &quot;example_user&quot;,   &quot;email&quot;: &quot;example@example.com&quot;,   &quot;password&quot;: &quot;password123&quot;,   &quot;role&quot;: &quot;admin&quot; }" />
+      </UrlInfo>
+    </remoteSpecificationUrls>
+  </component>
+</project>
