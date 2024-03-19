@@ -109,6 +109,26 @@ func hashPassword(password string) (string, error) {
 	return string(hashedPassword), nil
 }
 
+// loginHandler
+func loginHondler(w http.ResponseWriter, r *http.Request) {
+	var user User
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+	authenticated, err := authenticateUser(user.Username, user.Password)
+	if err != nil {
+		http.Error(w, "Failed to authenticate user", http.StatusInternalServerError)
+		return
+	}
+	if !authenticated {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		return
+	}
+	//generate JWT-token
+}
+
 // addUserToDB adds a new user to the database
 func addUserToDB(user User) error {
 	hashedPassword, err := hashPassword(user.Password)
