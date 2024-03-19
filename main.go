@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 )
 
 // User struct
@@ -32,6 +32,48 @@ type Claims struct {
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	jwt.StandardClaims
+}
+
+// rate-Limit for user
+var userRateLimit = make(map[string]*rate.Limiter)
+
+// Middleware-Function for Rate-Limit per user
+func rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username := getUserFromToken(r)
+
+		// check for user rate limit
+		limiter, ok := userRateLimit[username]
+		if !ok {
+			limiter = rate.NewLimiter(rate.Limit(10), 100)
+			userRateLimit[username] = limiter
+		}
+		if !limiter.Allow() {
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// getUserFromToken extracts the username from the JWT token
+func getUserFromToken(r *http.Request) string {
+	tokenString := r.Header.Get("Authorization")
+	tokenString = strings.Replace(tokenString, "Bearer ", "", 1)
+	if tokenString == "" {
+		return "" // Rückgabe eines leeren Benutzernamens, wenn kein Token gefunden wurde
+	}
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+	if err != nil || !token.Valid {
+		return "" // Rückgabe eines leeren Benutzernamens im Fehlerfall oder wenn das Token ungültig ist
+	}
+	if claims, ok := token.Claims.(*Claims); ok {
+		return claims.Username
+	}
+	return ""
 }
 
 func main() {
@@ -53,9 +95,9 @@ func main() {
 	http.HandleFunc("/get-user", getUserHandler)
 	http.HandleFunc("/shutdown", shutdownServerHandler)
 
-	// Start the server
+	// Start the server with rate limit middleware
 	fmt.Println("Server listening on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":8080", rateLimitMiddleware(http.DefaultServeMux)))
 }
 
 // hashPassword hashes the given password
@@ -99,30 +141,6 @@ func getUserFromDB(username string) (User, error) {
 	return user, nil
 }
 
-// authenticateUser authenticates a user by verifying their username and password
-func authenticateUser(username, password string) (bool, error) {
-	var hashedPassword string
-	err := db.QueryRow("SELECT password FROM users1 WHERE username = $1", username).Scan(&hashedPassword)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// User not found
-			return false, nil
-		}
-		// Another error occurred
-		return false, err
-	}
-
-	// Check if the password matches
-	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
-	if err != nil {
-		// Wrong password
-		return false, nil
-	}
-
-	// Authentication successful
-	return true, nil
-}
-
 // generateToken generates a JWT token for the given username
 func generateToken(username, role string) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
@@ -141,43 +159,7 @@ func generateToken(username, role string) (string, error) {
 	return tokenString, nil
 }
 
-// promptUserAction prompts the user for the action they want to perform
-func promptUserAction() (string, error) {
-	var action string
-	fmt.Println("What would you like to do?")
-	fmt.Println("1. Add a new user")
-	fmt.Println("2. Retrieve an existing user")
-	fmt.Println("3. Stop the server")
-	fmt.Print("Enter your choice: ")
-	reader := bufio.NewReader(os.Stdin)
-	action, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	action = strings.TrimSpace(action)
-	return action, nil
-}
-
-// promptUserForInput prompts the user for the user details
-func promptUserForInput() (User, error) {
-	var user User
-	fmt.Println("Please enter the following details:")
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Username: ")
-	user.Username, _ = reader.ReadString('\n')
-	user.Username = strings.TrimSpace(user.Username)
-	fmt.Print("Email: ")
-	user.Email, _ = reader.ReadString('\n')
-	user.Email = strings.TrimSpace(user.Email)
-	fmt.Print("Password: ")
-	user.Password, _ = reader.ReadString('\n')
-	user.Password = strings.TrimSpace(user.Password)
-	fmt.Print("Role: ")
-	user.Role, _ = reader.ReadString('\n')
-	user.Role = strings.TrimSpace(user.Role)
-	return user, nil
-}
-
+// addUserHandler handles adding a new user
 func addUserHandler(w http.ResponseWriter, r *http.Request) {
 	var user User
 	err := json.NewDecoder(r.Body).Decode(&user)
@@ -196,17 +178,7 @@ func addUserHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "User successfully added to the database.")
 }
 
-func stopServerHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Stopping the server...")
-	os.Exit(0)
-}
-
-func shutdownServerHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Shutting down the server...")
-	os.Exit(0)
-}
-
-// Handle function for retrieving a user
+// getUserHandler handles retrieving a user
 func getUserHandler(w http.ResponseWriter, r *http.Request) {
 	// Get the username from the query parameter
 	username := r.URL.Query().Get("username")
@@ -233,4 +205,10 @@ func getUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(userJSON)
+}
+
+// shutdownServerHandler handles shutting down the server
+func shutdownServerHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Shutting down server...")
+	// You can add code here to shut down the server
 }
